@@ -8,6 +8,7 @@ import com.openclassrooms.tourguide.user.UserReward;
 import java.time.LocalDateTime;
 import java.time.ZoneOffset;
 import java.util.*;
+import java.util.concurrent.CompletableFuture;
 import java.util.stream.Collectors;
 import java.util.stream.IntStream;
 
@@ -54,7 +55,7 @@ public class TourGuideService {
 
 	public VisitedLocation getUserLocation(User user) {
 		VisitedLocation visitedLocation = (user.getVisitedLocations().size() > 0) ? user.getLastVisitedLocation()
-				: trackUserLocation(user);
+				: trackUserLocation(user).join();
 		return visitedLocation;
 	}
 
@@ -81,14 +82,23 @@ public class TourGuideService {
 		return providers;
 	}
 
-	public VisitedLocation trackUserLocation(User user) {
-		VisitedLocation visitedLocation = gpsUtil.getUserLocation(user.getUserId());
-		user.addToVisitedLocations(visitedLocation);
-		rewardsService.calculateRewards(user);
-		return visitedLocation;
-	}
+    public CompletableFuture<VisitedLocation> trackUserLocation(User user) {
+        // Étape 1 : récupérer la localisation de l'utilisateur de manière asynchrone
+        return CompletableFuture.supplyAsync(() -> gpsUtil.getUserLocation(user.getUserId()))
+                .thenApply(visitedLocation -> {
+                    // Étape 2 : ajouter la visite à la liste
+                    user.addToVisitedLocations(visitedLocation);
+                    return visitedLocation;
+                })
+                .thenApplyAsync(visitedLocation -> {
+                    // Étape 3 : calcul des récompenses en parallèle
+                    rewardsService.calculateRewards(user);
+                    return visitedLocation;
+                });
+    }
 
-	public List<Attraction> getNearByAttractions(VisitedLocation visitedLocation) {
+
+    public List<Attraction> getNearByAttractions(VisitedLocation visitedLocation) {
 		return gpsUtil.getAttractions().stream()
 				.sorted(Comparator.comparingDouble(a ->
 						rewardsService.getDistance(a, visitedLocation.location)))
