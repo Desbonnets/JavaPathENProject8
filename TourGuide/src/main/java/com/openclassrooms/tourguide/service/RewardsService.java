@@ -51,46 +51,30 @@ public class RewardsService {
         List<VisitedLocation> userLocations = user.getVisitedLocations();
         List<Attraction> attractions = attractionService.getAttractions();
 
-        // Cache local pour éviter les doublons
         Set<String> rewardedAttractions = user.getUserRewards().stream()
                 .map(r -> r.attraction.attractionName)
                 .collect(Collectors.toSet());
+
+        Executor executor = getExecutor(); // ✅ utiliser ton exécuteur partagé
 
         List<CompletableFuture<Void>> futures = userLocations.stream()
                 .flatMap(visitedLocation -> attractions.stream()
                         .filter(a -> !rewardedAttractions.contains(a.attractionName))
                         .filter(a -> nearAttraction(visitedLocation, a))
                         .map(a -> getRewardPoints(a, user)
-                                .thenApply(points -> new UserReward(visitedLocation, a, points))
-                                .thenAccept(reward -> {
-                                    synchronized(user) {
+                                .thenApplyAsync(points -> new UserReward(visitedLocation, a, points), executor)
+                                .thenAcceptAsync(reward -> {
+                                    synchronized (user) {
                                         user.addUserReward(reward);
                                         rewardedAttractions.add(a.attractionName);
                                     }
-                                })
+                                }, executor)
                         )
                 ).toList();
 
         CompletableFuture.allOf(futures.toArray(new CompletableFuture[0])).join();
-
-
-//        for (VisitedLocation visitedLocation : userLocations) {
-//            // Filtrage : on ne garde que les attractions proches pour réduire la charge CPU
-//            List<Attraction> nearbyAttractions = attractions.stream()
-//                    .filter(attraction -> nearAttraction(visitedLocation, attraction))
-//                    .toList();
-//
-//
-//
-//            for (Attraction attraction : nearbyAttractions) {
-//                if (!rewardedAttractions.contains(attraction.attractionName)) {
-//                    CompletableFuture<Integer> points = getRewardPoints(attraction, user);
-//                    user.addUserReward(new UserReward(visitedLocation, attraction, points.join()));
-//                    rewardedAttractions.add(attraction.attractionName);
-//                }
-//            }
-//        }
     }
+
 
 
     public boolean isWithinAttractionProximity(Attraction attraction, Location location) {
@@ -103,7 +87,7 @@ public class RewardsService {
 
     private CompletableFuture<Integer> getRewardPoints(Attraction attraction, User user) {
         return CompletableFuture.supplyAsync(() ->
-                rewardsCentral.getAttractionRewardPoints(attraction.attractionId, user.getUserId())
+                rewardsCentral.getAttractionRewardPoints(attraction.attractionId, user.getUserId()), getExecutor()
         );
     }
 	
