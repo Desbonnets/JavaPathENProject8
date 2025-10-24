@@ -9,6 +9,8 @@ import java.time.LocalDateTime;
 import java.time.ZoneOffset;
 import java.util.*;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.Executor;
+import java.util.concurrent.Executors;
 import java.util.stream.Collectors;
 import java.util.stream.IntStream;
 
@@ -32,10 +34,12 @@ public class TourGuideService {
 	private final TripPricer tripPricer = new TripPricer();
 	public final Tracker tracker;
 	boolean testMode = true;
+    private Executor executor;
 
 	public TourGuideService(GpsUtil gpsUtil, RewardsService rewardsService) {
 		this.gpsUtil = gpsUtil;
 		this.rewardsService = rewardsService;
+        this.executor = Executors.newFixedThreadPool(100);
 		
 		Locale.setDefault(Locale.US);
 
@@ -49,7 +53,11 @@ public class TourGuideService {
 		addShutDownHook();
 	}
 
-	public List<UserReward> getUserRewards(User user) {
+    public Executor getExecutor() {
+        return executor;
+    }
+
+    public List<UserReward> getUserRewards(User user) {
 		return user.getUserRewards();
 	}
 
@@ -84,14 +92,10 @@ public class TourGuideService {
 
     public CompletableFuture<VisitedLocation> trackUserLocation(User user) {
         // Étape 1 : récupérer la localisation de l'utilisateur de manière asynchrone
-        return CompletableFuture.supplyAsync(() -> gpsUtil.getUserLocation(user.getUserId()))
+        return CompletableFuture.supplyAsync(() -> gpsUtil.getUserLocation(user.getUserId()), getExecutor())
                 .thenApply(visitedLocation -> {
-                    // Étape 2 : ajouter la visite à la liste
-                    user.addToVisitedLocations(visitedLocation);
-                    return visitedLocation;
-                })
-                .thenApplyAsync(visitedLocation -> {
                     // Étape 3 : calcul des récompenses en parallèle
+                    user.addToVisitedLocations(visitedLocation);
                     rewardsService.calculateRewards(user);
                     return visitedLocation;
                 });
