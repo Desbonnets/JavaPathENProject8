@@ -1,6 +1,11 @@
 package com.openclassrooms.tourguide.service;
 
 import java.util.List;
+import java.util.Set;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.Executor;
+import java.util.concurrent.Executors;
+import java.util.stream.Collectors;
 
 import org.springframework.stereotype.Service;
 
@@ -20,13 +25,19 @@ public class RewardsService {
     private int defaultProximityBuffer = 10;
 	private int proximityBuffer = defaultProximityBuffer;
 	private int attractionProximityRange = 200;
-	private final GpsUtil gpsUtil;
 	private final RewardCentral rewardsCentral;
-	
-	public RewardsService(GpsUtil gpsUtil, RewardCentral rewardCentral) {
-		this.gpsUtil = gpsUtil;
+    private final AttractionService attractionService;
+    private Executor executor;
+
+	public RewardsService(RewardCentral rewardCentral, AttractionService attractionService) {
 		this.rewardsCentral = rewardCentral;
+        this.attractionService = attractionService;
+        this.executor = Executors.newFixedThreadPool(100);
 	}
+
+    public Executor getExecutor() {
+        return executor;
+    }
 	
 	public void setProximityBuffer(int proximityBuffer) {
 		this.proximityBuffer = proximityBuffer;
@@ -35,33 +46,50 @@ public class RewardsService {
 	public void setDefaultProximityBuffer() {
 		proximityBuffer = defaultProximityBuffer;
 	}
-	
-	public void calculateRewards(User user) {
-		List<VisitedLocation> userLocations = user.getVisitedLocations();
-		List<Attraction> attractions = gpsUtil.getAttractions();
-		
-		for(VisitedLocation visitedLocation : userLocations) {
-			for(Attraction attraction : attractions) {
-				if(user.getUserRewards().stream().filter(r -> r.attraction.attractionName.equals(attraction.attractionName)).count() == 0) {
-					if(nearAttraction(visitedLocation, attraction)) {
-						user.addUserReward(new UserReward(visitedLocation, attraction, getRewardPoints(attraction, user)));
-					}
-				}
-			}
-		}
-	}
-	
-	public boolean isWithinAttractionProximity(Attraction attraction, Location location) {
+
+    public void calculateRewards(User user) {
+        List<VisitedLocation> userLocations = user.getVisitedLocations();
+        List<Attraction> attractions = attractionService.getAttractions();
+
+        Set<String> rewardedAttractions = user.getUserRewards().stream()
+                .map(r -> r.attraction.attractionName)
+                .collect(Collectors.toSet());
+
+        Executor executor = getExecutor(); // ✅ utiliser ton exécuteur partagé
+
+        List<CompletableFuture<Void>> futures = userLocations.stream()
+                .flatMap(visitedLocation -> attractions.stream()
+                        .filter(a -> !rewardedAttractions.contains(a.attractionName))
+                        .filter(a -> nearAttraction(visitedLocation, a))
+                        .map(a -> getRewardPoints(a, user)
+                                .thenApplyAsync(points -> new UserReward(visitedLocation, a, points), executor)
+                                .thenAcceptAsync(reward -> {
+                                    synchronized (user) {
+                                        user.addUserReward(reward);
+                                        rewardedAttractions.add(a.attractionName);
+                                    }
+                                }, executor)
+                        )
+                ).toList();
+
+        CompletableFuture.allOf(futures.toArray(new CompletableFuture[0])).join();
+    }
+
+
+
+    public boolean isWithinAttractionProximity(Attraction attraction, Location location) {
 		return getDistance(attraction, location) > attractionProximityRange ? false : true;
 	}
 	
 	private boolean nearAttraction(VisitedLocation visitedLocation, Attraction attraction) {
 		return getDistance(attraction, visitedLocation.location) > proximityBuffer ? false : true;
 	}
-	
-	private int getRewardPoints(Attraction attraction, User user) {
-		return rewardsCentral.getAttractionRewardPoints(attraction.attractionId, user.getUserId());
-	}
+
+    private CompletableFuture<Integer> getRewardPoints(Attraction attraction, User user) {
+        return CompletableFuture.supplyAsync(() ->
+                rewardsCentral.getAttractionRewardPoints(attraction.attractionId, user.getUserId()), getExecutor()
+        );
+    }
 	
 	public double getDistance(Location loc1, Location loc2) {
         double lat1 = Math.toRadians(loc1.latitude);

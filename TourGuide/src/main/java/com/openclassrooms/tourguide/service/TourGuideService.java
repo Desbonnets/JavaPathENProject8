@@ -8,6 +8,9 @@ import com.openclassrooms.tourguide.user.UserReward;
 import java.time.LocalDateTime;
 import java.time.ZoneOffset;
 import java.util.*;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.Executor;
+import java.util.concurrent.Executors;
 import java.util.stream.Collectors;
 import java.util.stream.IntStream;
 
@@ -31,10 +34,12 @@ public class TourGuideService {
 	private final TripPricer tripPricer = new TripPricer();
 	public final Tracker tracker;
 	boolean testMode = true;
+    private Executor executor;
 
 	public TourGuideService(GpsUtil gpsUtil, RewardsService rewardsService) {
 		this.gpsUtil = gpsUtil;
 		this.rewardsService = rewardsService;
+        this.executor = Executors.newFixedThreadPool(100);
 		
 		Locale.setDefault(Locale.US);
 
@@ -48,13 +53,17 @@ public class TourGuideService {
 		addShutDownHook();
 	}
 
-	public List<UserReward> getUserRewards(User user) {
+    public Executor getExecutor() {
+        return executor;
+    }
+
+    public List<UserReward> getUserRewards(User user) {
 		return user.getUserRewards();
 	}
 
 	public VisitedLocation getUserLocation(User user) {
 		VisitedLocation visitedLocation = (user.getVisitedLocations().size() > 0) ? user.getLastVisitedLocation()
-				: trackUserLocation(user);
+				: trackUserLocation(user).join();
 		return visitedLocation;
 	}
 
@@ -81,14 +90,19 @@ public class TourGuideService {
 		return providers;
 	}
 
-	public VisitedLocation trackUserLocation(User user) {
-		VisitedLocation visitedLocation = gpsUtil.getUserLocation(user.getUserId());
-		user.addToVisitedLocations(visitedLocation);
-		rewardsService.calculateRewards(user);
-		return visitedLocation;
-	}
+    public CompletableFuture<VisitedLocation> trackUserLocation(User user) {
+        // Étape 1 : récupérer la localisation de l'utilisateur de manière asynchrone
+        return CompletableFuture.supplyAsync(() -> gpsUtil.getUserLocation(user.getUserId()), getExecutor())
+                .thenApply(visitedLocation -> {
+                    // Étape 3 : calcul des récompenses en parallèle
+                    user.addToVisitedLocations(visitedLocation);
+                    rewardsService.calculateRewards(user);
+                    return visitedLocation;
+                });
+    }
 
-	public List<Attraction> getNearByAttractions(VisitedLocation visitedLocation) {
+
+    public List<Attraction> getNearByAttractions(VisitedLocation visitedLocation) {
 		return gpsUtil.getAttractions().stream()
 				.sorted(Comparator.comparingDouble(a ->
 						rewardsService.getDistance(a, visitedLocation.location)))
