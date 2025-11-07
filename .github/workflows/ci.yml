@@ -5,6 +5,7 @@ on:
     branches: [ "**" ]
   pull_request:
     branches: [ "**" ]
+  workflow_dispatch:
 
 jobs:
   build:
@@ -21,21 +22,27 @@ jobs:
           distribution: 'temurin'
           cache: maven
 
+      - name: Move into project directory
+        working-directory: ./TourGuide
+        run: pwd
+
       - name: Install local JAR dependencies
+        working-directory: ./TourGuide
         run: |
-          mkdir -p ~/.m2/repository
           mvn install:install-file -Dfile=libs/gpsUtil.jar -DgroupId=gpsUtil -DartifactId=gpsUtil -Dversion=1.0.0 -Dpackaging=jar
           mvn install:install-file -Dfile=libs/RewardCentral.jar -DgroupId=rewardCentral -DartifactId=rewardCentral -Dversion=1.0.0 -Dpackaging=jar
           mvn install:install-file -Dfile=libs/TripPricer.jar -DgroupId=tripPricer -DartifactId=tripPricer -Dversion=1.0.0 -Dpackaging=jar
 
       - name: Build and test with Maven
+        working-directory: ./TourGuide
         run: mvn clean verify --no-transfer-progress
 
       - name: Package application
+        working-directory: ./TourGuide
         run: mvn package -DskipTests --no-transfer-progress
 
       - name: Upload built artifact
         uses: actions/upload-artifact@v4
         with:
-          name: springboot-app
-          path: target/*.jar
+          name: tourguide-jar
+          path: TourGuide/target/*.jar
